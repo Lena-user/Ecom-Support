@@ -1,0 +1,20 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Node
+node_modules/
+.next/
+
+# Docker volumes
+redis_data/
+qdrant_data/
+
+# IDE
+.vscode/
+.idea/
