@@ -33,14 +33,18 @@ def _get_client() -> genai.Client:
 CLASSIFY_PROMPT = """Bạn là hệ thống phân loại yêu cầu khách hàng cho sàn thương mại điện tử.
 
 Phân loại tin nhắn sau vào ĐÚNG 1 trong các loại:
-- "info_inquiry": Hỏi đáp thông tin (chính sách, thời gian giao hàng, mã giảm giá, hướng dẫn chung)
-- "complaint": Khiếu nại (hàng lỗi, giao sai, giao chậm, không đúng mô tả)
+- "info_inquiry": Hỏi đáp thông tin (hỏi về chính sách đổi trả, thời gian giao hàng, cách dùng mã giảm giá, hướng dẫn chung)
+- "complaint": Khiếu nại (báo cáo hàng lỗi, giao sai, giao chậm, không đúng mô tả - cần giải quyết cho 1 đơn hàng cụ thể)
 - "technical": Yêu cầu kỹ thuật (lỗi app, không đăng nhập được, lỗi thanh toán kỹ thuật)
 - "payment": Yêu cầu thanh toán nhạy cảm (hoàn tiền, tranh chấp giao dịch, mất tiền)
 - "emergency": Khẩn cấp (gian lận, tài khoản bị hack, lừa đảo)
 - "spam": Tin rác, quảng cáo, nội dung không liên quan
 - "missing_info": Thiếu thông tin để xử lý (tin nhắn mơ hồ, không rõ yêu cầu)
 - "human_requested": Khách hàng chủ động yêu cầu gặp nhân viên / người thật
+
+LƯU Ý QUAN TRỌNG: 
+- Nếu khách hàng HỎI VỀ CÁCH THỨC/CHÍNH SÁCH (VD: "Làm sao để đổi trả", "Trả hàng được không", "Sản phẩm lỗi đổi thế nào"), hãy xếp vào "info_inquiry" vì đây là câu hỏi chung.
+- Chỉ xếp vào "complaint" khi khách ĐANG báo cáo một vấn đề cụ thể của họ (VD: "Hàng của tôi bị rách rồi", "Tôi nhận sai hàng").
 
 Xác định mức ưu tiên:
 - "low": Hỏi đáp thông tin chung
@@ -53,7 +57,7 @@ Trả về JSON với format:
     "classification": "<loại>",
     "priority": "<mức ưu tiên>",
     "has_sufficient_info": true/false,
-    "requires_human": true/false,
+    "requires_human": true/false, // CHỈ true nếu là complaint, payment, emergency, human_requested hoặc vấn đề không thể tự động trả lời bằng FAQ
     "reasoning": "<giải thích ngắn gọn>"
 }}
 
@@ -131,13 +135,13 @@ def classify_message(message: str, channel: str) -> dict:
 # RAG Response generation prompt
 # ============================================================
 RAG_RESPONSE_PROMPT = """Bạn là nhân viên hỗ trợ khách hàng cho sàn thương mại điện tử.
-Trả lời câu hỏi của khách hàng dựa HOÀN TOÀN vào tài liệu được cung cấp bên dưới.
+Trả lời câu hỏi của khách hàng dựa vào tài liệu được cung cấp bên dưới (nếu có).
+Nếu tài liệu không đủ thông tin hoặc không có tài liệu, bạn hãy dùng kiến thức chung về thương mại điện tử để giải đáp một cách thân thiện và chuyên nghiệp.
 
 Quy tắc:
 - Trả lời bằng tiếng Việt, thân thiện, chuyên nghiệp
-- CHỈ dùng thông tin từ tài liệu, KHÔNG bịa thêm
-- Trích dẫn nguồn tài liệu ở cuối câu trả lời
-- Nếu tài liệu không đủ để trả lời, nói rõ và đề nghị chuyển nhân viên
+- Nếu dùng tài liệu, hãy trích dẫn nguồn
+- Không bịa mã số hay tên riêng nếu không chắc chắn
 
 Tài liệu tham khảo:
 {documents}

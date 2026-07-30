@@ -8,7 +8,7 @@ class SupportRequest(BaseModel):
 
     customer_id: str = Field(..., description="Mã khách hàng")
     channel: str = Field(
-        ..., pattern="^(web_chat|email)$", description="Kênh gửi: web_chat hoặc email"
+        ..., pattern="^(web_chat|email|messaging_app|internal_system)$", description="Kênh gửi"
     )
     message: str = Field(..., min_length=1, description="Nội dung yêu cầu")
     metadata: dict = Field(default_factory=dict, description="Thông tin bổ sung")

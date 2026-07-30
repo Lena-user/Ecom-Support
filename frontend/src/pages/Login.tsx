@@ -22,7 +22,8 @@ export default function Login() {
     if (login(email, pass)) {
       const userObj = {
         'admin@demo.com': '/admin',
-        'staff@demo.com': '/dashboard'
+        'staff@demo.com': '/dashboard',
+        'staff2@demo.com': '/dashboard'
       } as Record<string, string>
       
       navigate(userObj[email] || '/')
@@ -81,7 +82,8 @@ export default function Login() {
         <div style={{ marginTop: '32px', padding: '16px', background: '#f8f9fa', borderRadius: '8px', fontSize: '0.85rem', color: '#444746' }}>
           <strong>Tài khoản Demo (Pass chung: 123):</strong>
           <ul style={{ paddingLeft: '20px', margin: '8px 0 0 0' }}>
-            <li style={{ marginBottom: '4px' }}>CSKH: <code>staff@demo.com</code></li>
+            <li style={{ marginBottom: '4px' }}>CSKH 1: <code>staff@demo.com</code> (Linh Nguyễn)</li>
+            <li style={{ marginBottom: '4px' }}>CSKH 2: <code>staff2@demo.com</code> (Minh Trần)</li>
             <li>Admin: <code>admin@demo.com</code></li>
           </ul>
         </div>

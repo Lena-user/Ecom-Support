@@ -34,6 +34,7 @@ class SupportState(TypedDict):
     # --- RAG ---
     rag_documents: list[dict]
     similarity_score: float
+    embedding_vector: list[float]
 
     # --- Output ---
     response: str

@@ -72,7 +72,7 @@ MOCK_KB = [
 _recent_messages: dict[str, list[dict]] = {}
 
 # Ngưỡng similarity cho RAG gate
-SIMILARITY_THRESHOLD = 0.70
+SIMILARITY_THRESHOLD = 0.65
 
 
 # ============================================================
@@ -99,7 +99,6 @@ def check_duplicate(state: SupportState) -> dict:
     customer_id = state["customer_id"]
     message = state["message"].strip()
     now = datetime.now().isoformat(timespec="seconds")
-    
     qdrant = get_qdrant()
     vector = get_embedding(message)
     
@@ -125,11 +124,11 @@ def check_duplicate(state: SupportState) -> dict:
             "is_duplicate": True,
             "duplicate_ticket_id": prev_ticket,
             "response": (
-                f"Yêu cầu này rất giống với nội dung bạn đã gửi trong ticket "
-                f"{prev_ticket}. Vui lòng theo dõi ticket "
-                f"đó để cập nhật tình trạng xử lý."
+                f"Mình thấy bạn vừa hỏi câu này trước đó rồi ở mã hỗ trợ "
+                f"{prev_ticket}. Bạn xem lại câu trả lời ở trên nhé!"
             ),
             "status": "duplicate",
+            "embedding_vector": vector,
             "processing_log": [
                 f"[{now}] DUPLICATE_CHECK: ⚠ Trùng lặp ngữ nghĩa với ticket "
                 f"{prev_ticket} (score={search_result[0].score:.2f}) → dừng xử lý"
@@ -158,6 +157,7 @@ def check_duplicate(state: SupportState) -> dict:
     return {
         "is_duplicate": False,
         "duplicate_ticket_id": "",
+        "embedding_vector": vector,
         "processing_log": [
             f"[{now}] DUPLICATE_CHECK: ✓ Không trùng lặp"
         ],
@@ -267,7 +267,9 @@ def rag_respond(state: SupportState) -> dict:
     now = datetime.now().isoformat(timespec="seconds")
 
     qdrant = get_qdrant()
-    vector = get_embedding(message)
+    vector = state.get("embedding_vector")
+    if not vector:
+        vector = get_embedding(message)
     
     # Tìm kiếm trên Qdrant
     search_result = qdrant.search(
@@ -296,20 +298,15 @@ def rag_respond(state: SupportState) -> dict:
             "content": best_doc["content"],
             "score": best_score,
         }]
-        # Dùng Gemini sinh câu trả lời tự nhiên từ tài liệu
-        response = generate_rag_response(
-            message=state["message"],
-            documents=rag_documents,
-        )
+        
+    # Dùng Gemini sinh câu trả lời tự nhiên (dù có tài liệu hay không)
+    response = generate_rag_response(
+        message=state["message"],
+        documents=rag_documents,
+    )
 
     escalation_reason = ""
-    if not passed_gate:
-        escalation_reason = (
-            f"Không tìm thấy tài liệu phù hợp "
-            f"(similarity={best_score:.2f} < ngưỡng={SIMILARITY_THRESHOLD})"
-        )
-
-    gate_result = "✓ ĐỦ tin cậy" if passed_gate else "✗ KHÔNG đủ → ESCALATE"
+    gate_result = "✓ Có tài liệu tham khảo" if passed_gate else "⚠ Trả lời bằng kiến thức chung"
 
     return {
         "rag_documents": rag_documents,
@@ -317,8 +314,7 @@ def rag_respond(state: SupportState) -> dict:
         "response": response,
         "escalation_reason": escalation_reason,
         "processing_log": [
-            f"[{now}] RAG [Gemini]: similarity={best_score:.2f}, "
-            f"ngưỡng={SIMILARITY_THRESHOLD} → {gate_result}"
+            f"[{now}] RAG [Gemini]: similarity={best_score:.2f} → {gate_result}"
         ],
     }
 
@@ -410,7 +406,5 @@ def after_classify(state: SupportState) -> str:
 
 
 def after_rag(state: SupportState) -> str:
-    """Sau bước RAG: similarity đủ cao → respond, thấp → escalate."""
-    if state.get("similarity_score", 0) >= SIMILARITY_THRESHOLD:
-        return "respond"
-    return "escalate"
+    """Sau bước RAG: Luôn trả lời thẳng với câu hỏi thông tin."""
+    return "respond"

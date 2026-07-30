@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from qdrant_client import QdrantClient
 
 from app.api.routes import router as support_router
+from app.api.ws import ws_router
 from app.config import settings
 
 
@@ -54,6 +55,7 @@ app.add_middleware(
 
 # ---------- Router đăng ký ---------- #
 app.include_router(support_router)
+app.include_router(ws_router)
 
 
 # ---------- Routes ---------- #
