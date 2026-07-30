@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ArrowUp, User, Sparkles, ShieldAlert, Headset, Bot } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../AuthContext'
+import { API_BASE, WS_BASE } from '../config'
 
 interface Message {
   id: string;
@@ -42,7 +43,7 @@ export default function Chat() {
   useEffect(() => {
     async function restoreSession() {
       try {
-        const res = await fetch(`http://localhost:8000/api/support/session/${guestId}`)
+        const res = await fetch(`${API_BASE}/api/support/session/${guestId}`)
         const data = await res.json()
         if (!data.exists) return
 
@@ -87,7 +88,7 @@ export default function Chat() {
     function connect() {
       if (closedIntentionally.current) return   // đã cleanup, không reconnect nữa
 
-      const ws = new WebSocket(`ws://localhost:8000/ws/chat/${guestId}`)
+      const ws = new WebSocket(`${WS_BASE}/ws/chat/${guestId}`)
       wsRef.current = ws
 
       ws.onmessage = (event) => {
@@ -150,7 +151,7 @@ export default function Chat() {
     // Gửi qua AI pipeline
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:8000/api/support/submit', {
+      const response = await fetch(`${API_BASE}/api/support/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

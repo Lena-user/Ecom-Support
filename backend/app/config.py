@@ -17,12 +17,16 @@ class Settings(BaseSettings):
     # Gemini API
     gemini_api_key: str = ""
 
-    # Gemini models — tách 2 tier theo độ phức tạp
+    # Gemini models — kiến trúc tách riêng 2 tier (classification vs RAG response)
+    # để có thể đổi độc lập qua .env; hiện đội dự án chọn dùng chung 1 model cho cả 2.
     gemini_model_fast: str = "gemini-3.5-flash"    # Classification/routing (nhanh, rẻ)
     gemini_model_quality: str = "gemini-3.5-flash"  # RAG response (chất lượng)
 
     # Embedding API (dùng ở bước 4)
     openai_api_key: str = ""
+
+    # Auth — đổi jwt_secret qua .env khi triển khai thật, default chỉ dùng cho dev
+    jwt_secret: str = "dev-only-insecure-secret-change-me"
 
     class Config:
         env_file = ".env"

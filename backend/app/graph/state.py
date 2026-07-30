@@ -35,6 +35,8 @@ class SupportState(TypedDict):
     rag_documents: list[dict]
     similarity_score: float
     embedding_vector: list[float]
+    rag_has_sufficient_grounding: bool  # Gemini tự đánh giá có đủ căn cứ trả lời hay không
+    needs_kb_review: bool               # True nếu cần log vào "khoảng trống kiến thức"
 
     # --- Output ---
     response: str

@@ -8,10 +8,12 @@ Field processing_log dùng Annotated[list, operator.add] nên trả về list
 sẽ được append vào log hiện tại (không ghi đè).
 """
 
+import time
 import uuid
 from datetime import datetime
-from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct
+from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct, Range
 
+from app import settings_store
 from app.graph.state import SupportState
 from app.llm import classify_message, generate_rag_response, get_embedding
 from app.qdrant import get_qdrant
@@ -71,9 +73,6 @@ MOCK_KB = [
 # Mock store cho duplicate check (trong production dùng Qdrant embedding)
 _recent_messages: dict[str, list[dict]] = {}
 
-# Ngưỡng similarity cho RAG gate
-SIMILARITY_THRESHOLD = 0.65
-
 
 # ============================================================
 # NODE 1: Ingestion — chuẩn hóa input
@@ -95,14 +94,18 @@ def ingest(state: SupportState) -> dict:
 # NODE 2: Duplicate Check — dùng Qdrant (Semantic Search)
 # ============================================================
 def check_duplicate(state: SupportState) -> dict:
-    """Kiểm tra trùng lặp bằng Vector Search trên Qdrant."""
+    """Kiểm tra trùng lặp bằng Vector Search trên Qdrant, giới hạn trong
+    khoảng thời gian duplicate_window_hours cấu hình được (Admin > Cấu hình AI)."""
     customer_id = state["customer_id"]
     message = state["message"].strip()
     now = datetime.now().isoformat(timespec="seconds")
+    now_epoch = time.time()
+    ai_settings = settings_store.get_settings()
+    window_seconds = ai_settings["duplicate_window_hours"] * 3600
     qdrant = get_qdrant()
     vector = get_embedding(message)
-    
-    # Tìm kiếm ticket cũ của ĐÚNG khách hàng này
+
+    # Tìm kiếm ticket cũ của ĐÚNG khách hàng này, trong window_hours gần đây
     search_result = qdrant.search(
         collection_name="tickets",
         query_vector=vector,
@@ -111,7 +114,11 @@ def check_duplicate(state: SupportState) -> dict:
                 FieldCondition(
                     key="customer_id",
                     match=MatchValue(value=customer_id)
-                )
+                ),
+                FieldCondition(
+                    key="timestamp_epoch",
+                    range=Range(gte=now_epoch - window_seconds),
+                ),
             ]
         ),
         limit=1,
@@ -136,7 +143,6 @@ def check_duplicate(state: SupportState) -> dict:
         }
 
     # Lưu message hiện tại vào store
-    import time
     point_id = int(time.time() * 1000) % (2**63 - 1) # Generate a pseudo-random integer ID
     qdrant.upsert(
         collection_name="tickets",
@@ -149,6 +155,7 @@ def check_duplicate(state: SupportState) -> dict:
                     "ticket_id": state["ticket_id"],
                     "customer_id": customer_id,
                     "timestamp": state["timestamp"],
+                    "timestamp_epoch": now_epoch,
                 }
             )
         ]
@@ -195,6 +202,19 @@ def classify(state: SupportState) -> dict:
         "human_requested": "Khách hàng yêu cầu nói chuyện với nhân viên",
     }
     escalation_reason = escalation_reasons.get(classification, "")
+
+    # Từ khoá escalate thủ công (Admin > Cấu hình AI) — ép escalate dù Gemini
+    # phân loại là gì, ví dụ khách đề cập tới pháp lý/báo chí.
+    ai_settings = settings_store.get_settings()
+    message_lower = state["message"].lower()
+    matched_keyword = next(
+        (kw for kw in ai_settings["escalate_keywords"] if kw.strip() and kw.strip().lower() in message_lower),
+        None,
+    )
+    if matched_keyword:
+        requires_human = True
+        if not escalation_reason:
+            escalation_reason = f"Phát hiện từ khoá nhạy cảm cấu hình sẵn: '{matched_keyword}'"
 
     # Xác định route tiếp theo cho log
     if classification == "spam":
@@ -260,8 +280,11 @@ def ask_info(state: SupportState) -> dict:
 def rag_respond(state: SupportState) -> dict:
     """Tìm tài liệu liên quan bằng Qdrant và dùng Gemini sinh câu trả lời.
 
-    - Retrieval: Qdrant Vector Search
-    - Response generation: Gemini
+    - Retrieval: Qdrant Vector Search (top-3, lọc rác bằng similarity_threshold)
+    - Response generation + đánh giá độ tin cậy: Gemini (has_sufficient_grounding)
+      — quyết định resolved/escalate dựa vào chính đánh giá của Gemini, không
+      dựa vào con số similarity nữa (con số chỉ dùng để lọc bớt tài liệu rác
+      trước khi đưa cho Gemini đọc).
     """
     message = state["message"].strip()
     now = datetime.now().isoformat(timespec="seconds")
@@ -270,51 +293,52 @@ def rag_respond(state: SupportState) -> dict:
     vector = state.get("embedding_vector")
     if not vector:
         vector = get_embedding(message)
-    
-    # Tìm kiếm trên Qdrant
+
+    similarity_threshold = settings_store.get_settings()["similarity_threshold"]
+
+    # Lấy top-3 tài liệu gần nghĩa nhất, lọc bớt tài liệu hoàn toàn không liên quan
     search_result = qdrant.search(
         collection_name="knowledge_base",
         query_vector=vector,
-        limit=1,
+        limit=3,
+        score_threshold=similarity_threshold,
     )
 
-    best_doc = None
-    best_score = 0.0
+    rag_documents = [
+        {
+            "id": r.payload["id"],
+            "source": r.payload["source"],
+            "content": r.payload["content"],
+            "score": r.score,
+        }
+        for r in search_result
+    ]
+    best_score = rag_documents[0]["score"] if rag_documents else 0.0
 
-    if search_result:
-        best_doc = search_result[0].payload
-        best_score = search_result[0].score
-
-    # Qua similarity gate
-    passed_gate = best_score >= SIMILARITY_THRESHOLD
-
-    rag_documents = []
-    response = ""
-
-    if best_doc and passed_gate:
-        rag_documents = [{
-            "id": best_doc["id"],
-            "source": best_doc["source"],
-            "content": best_doc["content"],
-            "score": best_score,
-        }]
-        
-    # Dùng Gemini sinh câu trả lời tự nhiên (dù có tài liệu hay không)
-    response = generate_rag_response(
+    # Gemini tự đọc tài liệu + câu hỏi, sinh câu trả lời và tự đánh giá độ tin cậy
+    result = generate_rag_response(
         message=state["message"],
         documents=rag_documents,
     )
+    has_sufficient_grounding = result["has_sufficient_grounding"]
+    reasoning = result.get("reasoning", "")
 
-    escalation_reason = ""
-    gate_result = "✓ Có tài liệu tham khảo" if passed_gate else "⚠ Trả lời bằng kiến thức chung"
+    escalation_reason = (
+        "" if has_sufficient_grounding
+        else f"AI đánh giá chưa đủ căn cứ tài liệu để trả lời: {reasoning}"
+    )
+    gate_result = "✓ Đủ căn cứ trả lời" if has_sufficient_grounding else "⚠ Không đủ căn cứ → chuyển nhân viên"
 
     return {
         "rag_documents": rag_documents,
         "similarity_score": best_score,
-        "response": response,
+        "response": result["answer"],
         "escalation_reason": escalation_reason,
+        "rag_has_sufficient_grounding": has_sufficient_grounding,
+        "needs_kb_review": not has_sufficient_grounding,
         "processing_log": [
-            f"[{now}] RAG [Gemini]: similarity={best_score:.2f} → {gate_result}"
+            f"[{now}] RAG [Gemini]: {len(rag_documents)} tài liệu (best={best_score:.2f}) "
+            f"→ {gate_result} | {reasoning}"
         ],
     }
 
@@ -406,5 +430,6 @@ def after_classify(state: SupportState) -> str:
 
 
 def after_rag(state: SupportState) -> str:
-    """Sau bước RAG: Luôn trả lời thẳng với câu hỏi thông tin."""
-    return "respond"
+    """Sau bước RAG: chỉ tự trả lời nếu Gemini đánh giá đủ căn cứ tài liệu,
+    ngược lại chuyển cho nhân viên (an toàn khi không chắc chắn)."""
+    return "respond" if state.get("rag_has_sufficient_grounding", True) else "escalate"

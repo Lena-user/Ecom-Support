@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Inbox, CheckCircle, Clock, LogOut, Activity, UserCheck, XCircle, Send, User, Headset, MessageCircle, Search } from 'lucide-react'
 import { useAuth } from '../AuthContext'
 import { useNavigate } from 'react-router-dom'
+import { API_BASE, WS_BASE } from '../config'
 
 interface Ticket {
   id: string;
@@ -13,6 +14,7 @@ interface Ticket {
   log: string[];
   message?: string;
   staff_assigned?: string | null;
+  escalation_reason?: string;
 }
 
 type FilterTab = 'ALL' | 'PENDING' | 'HANDLING' | 'RESOLVED'
@@ -28,8 +30,9 @@ export default function Dashboard() {
   const wsRef = useRef<WebSocket | null>(null)
   const wsTicketIdRef = useRef<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const { logout, userName } = useAuth()
+  const { logout, userName, token } = useAuth()
   const navigate = useNavigate()
+  const authHeaders = { Authorization: `Bearer ${token}` }
 
   // ── WebSocket ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -58,7 +61,7 @@ export default function Dashboard() {
     }
 
     if (isLive && customerId) {
-      const ws = new WebSocket(`ws://localhost:8000/ws/chat/${customerId}`)
+      const ws = new WebSocket(`${WS_BASE}/ws/chat/${customerId}?token=${encodeURIComponent(token || '')}`)
       wsRef.current = ws
       ws.onmessage = (event) => {
         try {
@@ -91,7 +94,12 @@ export default function Dashboard() {
   const fetchTickets = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('http://localhost:8000/api/support/tickets')
+      const res = await fetch(`${API_BASE}/api/support/tickets`, { headers: authHeaders })
+      if (res.status === 401) {
+        logout()
+        navigate('/login')
+        return
+      }
       const data: Ticket[] = await res.json()
       setTickets(data)
       setSelected(prev => {
@@ -104,14 +112,15 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
 
   // ── Actions ───────────────────────────────────────────────────────
   const handleAccept = async () => {
     if (!selected) return
-    const res = await fetch(`http://localhost:8000/api/support/tickets/${selected.id}/accept`, {
+    const res = await fetch(`${API_BASE}/api/support/tickets/${selected.id}/accept`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ staff_name: userName || 'Nhân viên CSKH' }),
     })
     const data = await res.json()
@@ -121,7 +130,7 @@ export default function Dashboard() {
 
   const handleClose = async () => {
     if (!selected) return
-    await fetch(`http://localhost:8000/api/support/tickets/${selected.id}/close`, { method: 'POST' })
+    await fetch(`${API_BASE}/api/support/tickets/${selected.id}/close`, { method: 'POST', headers: authHeaders })
     fetchTickets()
   }
 
@@ -349,6 +358,11 @@ export default function Dashboard() {
                     {selected.type && <span style={{ color: '#9aa0a6' }}>• {selected.type}</span>}
                     {selected.priority && <span style={{ color: '#ea4335', fontWeight: 600 }}>• {selected.priority}</span>}
                   </div>
+                  {selected.escalation_reason && (
+                    <div style={{ fontSize: '0.78rem', color: '#c5221f', marginTop: '2px', maxWidth: '420px' }}>
+                      Lý do chuyển: {selected.escalation_reason}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -1,37 +1,217 @@
-import { useState } from 'react'
-import { LayoutDashboard, Settings, Server, Users, LogOut } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { LayoutDashboard, Settings, Server, Users, LogOut, BookOpen, Pencil, Trash2 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts'
 import { useAuth } from '../AuthContext'
 import { useNavigate } from 'react-router-dom'
+import { API_BASE } from '../config'
 
-const dataLine = [
-  { time: '08:00', requests: 10 },
-  { time: '10:00', requests: 45 },
-  { time: '12:00', requests: 30 },
-  { time: '14:00', requests: 60 },
-  { time: '16:00', requests: 80 },
-  { time: '18:00', requests: 40 },
-]
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d']
 
-const dataPie = [
-  { name: 'Info', value: 400 },
-  { name: 'Complaint', value: 300 },
-  { name: 'Refund', value: 300 },
-  { name: 'Other', value: 200 },
-]
+interface Stats {
+  total_requests: number
+  auto_resolved_rate: number
+  escalated_count: number
+  by_classification: Record<string, number>
+  by_type_status: Record<string, { auto: number; escalate: number }>
+  requests_by_hour: [string, number][]
+  recent_logs: string[]
+}
 
-const dataBar = [
-  { name: 'Info', auto: 80, escalate: 20 },
-  { name: 'Complaint', auto: 30, escalate: 70 },
-  { name: 'Refund', auto: 50, escalate: 50 },
-]
+interface Health {
+  healthy: boolean
+  services: Record<string, string>
+}
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042']
+interface AISettings {
+  similarity_threshold: number
+  duplicate_window_hours: number
+  escalate_keywords: string[]
+}
+
+interface KBDoc {
+  id: string
+  source: string
+  content: string
+}
+
+interface KnowledgeGap {
+  message: string
+  reasoning: string
+  ticket_id: string
+  classification: string
+  timestamp: number
+}
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('overview')
-  const { logout } = useAuth()
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [health, setHealth] = useState<Health | null>(null)
+  const { logout, token } = useAuth()
   const navigate = useNavigate()
+  const authHeaders = { Authorization: `Bearer ${token}` }
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/support/stats`, { headers: authHeaders })
+      if (res.status === 401) {
+        logout()
+        navigate('/login')
+        return
+      }
+      setStats(await res.json())
+    } catch (err) {
+      console.error('Fetch stats failed:', err)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/health`)
+      setHealth(await res.json())
+    } catch (err) {
+      console.error('Fetch health failed:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchStats()
+    fetchHealth()
+    const interval = setInterval(() => {
+      fetchStats()
+      fetchHealth()
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [fetchStats, fetchHealth])
+
+  const dataLine = (stats?.requests_by_hour ?? []).map(([time, requests]) => ({ time, requests }))
+  const dataPie = Object.entries(stats?.by_classification ?? {}).map(([name, value]) => ({ name, value }))
+  const dataBar = Object.entries(stats?.by_type_status ?? {}).map(([name, v]) => ({ name, ...v }))
+
+  // ── Cấu hình AI ──────────────────────────────────────────────────────
+  const [aiSettings, setAiSettings] = useState<AISettings | null>(null)
+  const [keywordsText, setKeywordsText] = useState('')
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [settingsSaved, setSettingsSaved] = useState(false)
+
+  useEffect(() => {
+    if (activeTab !== 'config') return
+    fetch(`${API_BASE}/api/support/settings`, { headers: authHeaders })
+      .then(res => res.json())
+      .then((data: AISettings) => {
+        setAiSettings(data)
+        setKeywordsText(data.escalate_keywords.join(', '))
+      })
+      .catch(err => console.error('Fetch settings failed:', err))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, token])
+
+  const handleSaveSettings = async () => {
+    if (!aiSettings) return
+    setSavingSettings(true)
+    setSettingsSaved(false)
+    try {
+      const payload = {
+        ...aiSettings,
+        escalate_keywords: keywordsText.split(',').map(k => k.trim()).filter(Boolean),
+      }
+      const res = await fetch(`${API_BASE}/api/support/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify(payload),
+      })
+      const saved: AISettings = await res.json()
+      setAiSettings(saved)
+      setKeywordsText(saved.escalate_keywords.join(', '))
+      setSettingsSaved(true)
+    } catch (err) {
+      console.error('Save settings failed:', err)
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  // ── Knowledge Base ───────────────────────────────────────────────────
+  const [kbDocs, setKbDocs] = useState<KBDoc[]>([])
+  const [kbEditingId, setKbEditingId] = useState<string | null>(null)
+  const [kbSource, setKbSource] = useState('')
+  const [kbContent, setKbContent] = useState('')
+
+  const fetchKbDocs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/support/kb`, { headers: authHeaders })
+      setKbDocs(await res.json())
+    } catch (err) {
+      console.error('Fetch KB failed:', err)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  useEffect(() => {
+    if (activeTab === 'kb') fetchKbDocs()
+  }, [activeTab, fetchKbDocs])
+
+  const resetKbForm = () => {
+    setKbEditingId(null)
+    setKbSource('')
+    setKbContent('')
+  }
+
+  // ── Khoảng trống kiến thức (câu hỏi AI chưa đủ căn cứ trả lời) ────────
+  const [knowledgeGaps, setKnowledgeGaps] = useState<KnowledgeGap[]>([])
+
+  const fetchKnowledgeGaps = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/support/knowledge-gaps`, { headers: authHeaders })
+      setKnowledgeGaps(await res.json())
+    } catch (err) {
+      console.error('Fetch knowledge gaps failed:', err)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  useEffect(() => {
+    if (activeTab === 'kb') fetchKnowledgeGaps()
+  }, [activeTab, fetchKnowledgeGaps])
+
+  const handleUseGapAsNewDoc = (gap: KnowledgeGap) => {
+    setKbEditingId(null)
+    setKbSource(gap.message.length > 60 ? `${gap.message.slice(0, 60)}...` : gap.message)
+    setKbContent('')
+  }
+
+  const handleSubmitKbDoc = async () => {
+    if (!kbSource.trim() || !kbContent.trim()) return
+    const url = kbEditingId ? `${API_BASE}/api/support/kb/${kbEditingId}` : `${API_BASE}/api/support/kb`
+    const method = kbEditingId ? 'PUT' : 'POST'
+    try {
+      await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ source: kbSource.trim(), content: kbContent.trim() }),
+      })
+      resetKbForm()
+      fetchKbDocs()
+    } catch (err) {
+      console.error('Save KB doc failed:', err)
+    }
+  }
+
+  const handleEditKbDoc = (doc: KBDoc) => {
+    setKbEditingId(doc.id)
+    setKbSource(doc.source)
+    setKbContent(doc.content)
+  }
+
+  const handleDeleteKbDoc = async (id: string) => {
+    try {
+      await fetch(`${API_BASE}/api/support/kb/${id}`, { method: 'DELETE', headers: authHeaders })
+      if (kbEditingId === id) resetKbForm()
+      fetchKbDocs()
+    } catch (err) {
+      console.error('Delete KB doc failed:', err)
+    }
+  }
 
   return (
     <div style={{ display: 'flex', height: '100vh', backgroundColor: '#f4f7fb' }}>
@@ -44,6 +224,9 @@ export default function Admin() {
         </button>
         <button onClick={() => setActiveTab('config')} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', borderRadius: '8px', background: activeTab === 'config' ? '#333' : 'transparent', color: '#fff', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <Settings size={18} /> Cấu hình AI
+        </button>
+        <button onClick={() => setActiveTab('kb')} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', borderRadius: '8px', background: activeTab === 'kb' ? '#333' : 'transparent', color: '#fff', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+          <BookOpen size={18} /> Knowledge Base
         </button>
         <button onClick={() => setActiveTab('monitor')} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', borderRadius: '8px', background: activeTab === 'monitor' ? '#333' : 'transparent', color: '#fff', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <Server size={18} /> Giám sát vận hành
@@ -68,16 +251,16 @@ export default function Admin() {
             <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Tổng quan hệ thống</h1>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', marginBottom: '32px' }}>
               <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                <div style={{ color: '#888', fontSize: '0.9rem' }}>Tổng requests (Hôm nay)</div>
-                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#0b57d0' }}>1,245</div>
+                <div style={{ color: '#888', fontSize: '0.9rem' }}>Tổng requests</div>
+                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#0b57d0' }}>{stats?.total_requests ?? 0}</div>
               </div>
               <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                 <div style={{ color: '#888', fontSize: '0.9rem' }}>Tỷ lệ tự động xử lý (AI)</div>
-                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#137333' }}>72.5%</div>
+                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#137333' }}>{stats?.auto_resolved_rate ?? 0}%</div>
               </div>
               <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                <div style={{ color: '#888', fontSize: '0.9rem' }}>Tiết kiệm chi phí</div>
-                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#c5221f' }}>$450</div>
+                <div style={{ color: '#888', fontSize: '0.9rem' }}>Số ca chuyển nhân viên</div>
+                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#c5221f' }}>{stats?.escalated_count ?? 0}</div>
               </div>
             </div>
 
@@ -129,27 +312,150 @@ export default function Admin() {
         {activeTab === 'config' && (
           <div>
             <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Cấu hình AI Routing</h1>
-            <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '600px' }}>
-              <div>
-                <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>RAG Similarity Threshold</label>
-                <input type="range" min="0" max="1" step="0.05" defaultValue="0.75" style={{ width: '100%' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#888' }}>
-                  <span>Loose (0.5)</span>
-                  <span>Strict (0.9)</span>
+            {!aiSettings ? (
+              <p style={{ color: '#888' }}>Đang tải cấu hình...</p>
+            ) : (
+              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '600px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>
+                    RAG Similarity Threshold ({aiSettings.similarity_threshold.toFixed(2)})
+                  </label>
+                  <input
+                    type="range" min="0" max="1" step="0.05"
+                    value={aiSettings.similarity_threshold}
+                    onChange={e => setAiSettings({ ...aiSettings, similarity_threshold: parseFloat(e.target.value) })}
+                    style={{ width: '100%' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#888' }}>
+                    <span>Loose (0.5)</span>
+                    <span>Strict (0.9)</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Duplicate Time Window (hours)</label>
+                  <input
+                    type="number" min={1}
+                    value={aiSettings.duplicate_window_hours}
+                    onChange={e => setAiSettings({ ...aiSettings, duplicate_window_hours: parseInt(e.target.value, 10) || 1 })}
+                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Từ khóa Escalate thủ công (Cách nhau bằng dấu phẩy)</label>
+                  <textarea
+                    value={keywordsText}
+                    onChange={e => setKeywordsText(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc', minHeight: '80px', resize: 'none' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <button
+                    onClick={handleSaveSettings}
+                    disabled={savingSettings}
+                    style={{ padding: '12px 24px', background: '#0b57d0', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    {savingSettings ? 'Đang lưu...' : 'Lưu cấu hình'}
+                  </button>
+                  {settingsSaved && <span style={{ color: '#137333', fontWeight: 500 }}>Đã lưu.</span>}
                 </div>
               </div>
-              
+            )}
+          </div>
+        )}
+
+        {activeTab === 'kb' && (
+          <div>
+            <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Knowledge Base (RAG)</h1>
+
+            <div style={{ background: '#fff3cd', padding: '20px 24px', borderRadius: '12px', maxWidth: '700px', marginBottom: '24px' }}>
+              <h3 style={{ margin: '0 0 4px 0', color: '#856404' }}>Câu hỏi bot chưa trả lời được</h3>
+              <p style={{ margin: '0 0 12px 0', fontSize: '0.85rem', color: '#a07800' }}>
+                AI đánh giá không đủ căn cứ tài liệu để trả lời — đã chuyển nhân viên. Bấm vào 1 mục để thêm tài liệu bổ sung.
+              </p>
+              {knowledgeGaps.length === 0 ? (
+                <p style={{ fontSize: '0.85rem', color: '#a07800', margin: 0 }}>Chưa có khoảng trống nào được ghi nhận.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {knowledgeGaps.map((gap, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleUseGapAsNewDoc(gap)}
+                      style={{
+                        textAlign: 'left', background: '#fff', border: '1px solid #f0d78c', borderRadius: '8px',
+                        padding: '10px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#664d03',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600 }}>{gap.message}</div>
+                      <div style={{ color: '#a07800', marginTop: '2px' }}>{gap.reasoning}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '700px', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0 }}>{kbEditingId ? 'Sửa tài liệu' : 'Thêm tài liệu mới'}</h3>
               <div>
-                <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Duplicate Time Window (hours)</label>
-                <input type="number" defaultValue="24" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }} />
+                <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Nguồn</label>
+                <input
+                  value={kbSource}
+                  onChange={e => setKbSource(e.target.value)}
+                  placeholder="VD: Chính sách đổi trả"
+                  style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                />
               </div>
-              
               <div>
-                <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Từ khóa Escalate thủ công (Cách nhau bằng dấu phẩy)</label>
-                <textarea defaultValue="kiện, pháp luật, báo chí, lừa đảo" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc', minHeight: '80px', resize: 'none' }} />
+                <label style={{ display: 'block', fontWeight: 500, marginBottom: '8px' }}>Nội dung</label>
+                <textarea
+                  value={kbContent}
+                  onChange={e => setKbContent(e.target.value)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc', minHeight: '100px', resize: 'vertical' }}
+                />
               </div>
-              
-              <button style={{ padding: '12px', background: '#0b57d0', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' }}>Lưu cấu hình</button>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  onClick={handleSubmitKbDoc}
+                  style={{ padding: '10px 20px', background: '#0b57d0', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {kbEditingId ? 'Cập nhật' : 'Thêm tài liệu'}
+                </button>
+                {kbEditingId && (
+                  <button
+                    onClick={resetKbForm}
+                    style={{ padding: '10px 20px', background: '#f1f3f4', color: '#5f6368', border: 'none', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Huỷ
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {kbDocs.length === 0 ? (
+                <p style={{ color: '#888' }}>Chưa có tài liệu nào.</p>
+              ) : (
+                kbDocs.map(doc => (
+                  <div key={doc.id} style={{ background: '#fff', padding: '16px 20px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', gap: '16px', maxWidth: '700px' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, marginBottom: '4px' }}>{doc.source}</div>
+                      <div style={{ color: '#5f6368', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                        {doc.content}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                      <button onClick={() => handleEditKbDoc(doc)} style={{ padding: '8px', background: '#f1f3f4', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#5f6368' }}>
+                        <Pencil size={16} />
+                      </button>
+                      <button onClick={() => handleDeleteKbDoc(doc.id)} style={{ padding: '8px', background: '#fce8e6', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#c5221f' }}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -157,27 +463,27 @@ export default function Admin() {
         {activeTab === 'monitor' && (
           <div>
             <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Giám sát vận hành</h1>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>
-              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', borderLeft: '4px solid #137333' }}>
-                <h3 style={{ fontSize: '1rem', color: '#444' }}>Redis Store</h3>
-                <p style={{ color: '#137333', fontWeight: 600, fontSize: '1.2rem', marginTop: '8px' }}>Online (3ms ping)</p>
-              </div>
-              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', borderLeft: '4px solid #137333' }}>
-                <h3 style={{ fontSize: '1rem', color: '#444' }}>Qdrant Vector DB</h3>
-                <p style={{ color: '#137333', fontWeight: 600, fontSize: '1.2rem', marginTop: '8px' }}>Online (15ms ping)</p>
-              </div>
-              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', borderLeft: '4px solid #f9ab00' }}>
-                <h3 style={{ fontSize: '1rem', color: '#444' }}>Gemini API Limit</h3>
-                <p style={{ color: '#f9ab00', fontWeight: 600, fontSize: '1.2rem', marginTop: '8px' }}>Warning: 45/50 RPM</p>
-              </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>
+              {['redis', 'qdrant'].map(service => {
+                const status = health?.services?.[service]
+                const ok = status === 'ok'
+                return (
+                  <div key={service} style={{ background: '#fff', padding: '24px', borderRadius: '12px', borderLeft: `4px solid ${ok ? '#137333' : '#c5221f'}` }}>
+                    <h3 style={{ fontSize: '1rem', color: '#444' }}>{service === 'redis' ? 'Redis Store' : 'Qdrant Vector DB'}</h3>
+                    <p style={{ color: ok ? '#137333' : '#c5221f', fontWeight: 600, fontSize: '1.2rem', marginTop: '8px' }}>
+                      {status ? (ok ? 'Online' : status) : 'Đang kiểm tra...'}
+                    </p>
+                  </div>
+                )
+              })}
             </div>
-            
-            <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>System Logs</h3>
+
+            <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>System Logs (từ processing_log các session gần đây)</h3>
             <div style={{ background: '#1e1e1e', color: '#4af626', padding: '16px', borderRadius: '8px', fontFamily: 'monospace', height: '300px', overflowY: 'auto', fontSize: '0.9rem' }}>
-              <div>[2026-07-26 14:00:01] INFO: App startup complete</div>
-              <div>[2026-07-26 14:05:12] WARNING: Qdrant search took 400ms (threshold 200ms)</div>
-              <div>[2026-07-26 14:10:05] ERROR: Gemini Rate Limit Exceeded - retrying...</div>
-              <div>[2026-07-26 14:10:07] INFO: Gemini request successful on retry</div>
+              {(stats?.recent_logs?.length ?? 0) === 0
+                ? <div style={{ color: '#888' }}>Chưa có log nào.</div>
+                : stats!.recent_logs.map((line, i) => <div key={i}>{line}</div>)
+              }
             </div>
           </div>
         )}

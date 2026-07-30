@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import redis.asyncio as aioredis
+from app.auth import decode_token
 from app.config import settings
 
 ws_router = APIRouter()
@@ -17,6 +18,12 @@ def get_redis():
 @ws_router.websocket("/ws/chat/{session_id}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
+
+    # Khách hàng ẩn danh kết nối không kèm token (vẫn được phép chat, không bắt buộc login).
+    # Nhân viên/admin (Dashboard) kết nối kèm ?token=... để được phép gửi role="bot".
+    token = websocket.query_params.get("token")
+    payload = decode_token(token) if token else None
+    is_staff = bool(payload and payload.get("role") in ("staff", "admin"))
 
     redis = get_redis()
     pubsub = redis.pubsub()
@@ -51,29 +58,34 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     task = asyncio.create_task(reader())
 
     try:
-        from app.api.routes import SESSIONS_DB
+        from app import session_store
 
         while True:
             data = await websocket.receive_text()
 
-            # Lưu message vào session history
             try:
                 msg_obj = json.loads(data)
-                if msg_obj.get("type") == "message" and session_id in SESSIONS_DB:
-                    SESSIONS_DB[session_id]["messages"].append({
-                        "sender_type": "staff" if msg_obj.get("role") == "bot" else "customer",
-                        "content": msg_obj.get("content", ""),
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
-                    })
-            except (json.JSONDecodeError, KeyError):
-                pass
+            except json.JSONDecodeError:
+                msg_obj = None
+
+            # Chặn giả danh nhân viên: chỉ connection đã xác thực staff/admin
+            # (kèm ?token= hợp lệ) mới được gửi role="bot".
+            if msg_obj is not None and msg_obj.get("role") == "bot" and not is_staff:
+                continue
+
+            # Lưu message vào session history
+            if msg_obj is not None and msg_obj.get("type") == "message":
+                await session_store.append_message(session_id, {
+                    "sender_type": "staff" if msg_obj.get("role") == "bot" else "customer",
+                    "content": msg_obj.get("content", ""),
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                })
 
             # Publish vào Redis kèm _sender để reader() lọc echo
-            try:
-                enriched = json.loads(data)
-                enriched["_sender"] = conn_id
-                await redis.publish(f"session_{session_id}", json.dumps(enriched))
-            except (json.JSONDecodeError, TypeError):
+            if msg_obj is not None:
+                msg_obj["_sender"] = conn_id
+                await redis.publish(f"session_{session_id}", json.dumps(msg_obj))
+            else:
                 await redis.publish(f"session_{session_id}", data)
 
     except WebSocketDisconnect:

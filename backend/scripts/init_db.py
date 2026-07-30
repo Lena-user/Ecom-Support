@@ -31,7 +31,7 @@ def init_db():
     logger.info(f"Ingesting {len(MOCK_KB)} documents into '{kb_col}'...")
     points = []
     for i, doc in enumerate(MOCK_KB):
-        text_to_embed = f"Keywords: {', '.join(doc['keywords'])}. Content: {doc['content']}"
+        text_to_embed = f"{doc['source']}: {doc['content']}"
         vector = get_embedding(text_to_embed)
         points.append(
             PointStruct(

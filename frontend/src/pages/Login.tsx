@@ -16,19 +16,26 @@ export default function Login() {
     if (userRole === 'staff') navigate('/dashboard', { replace: true })
   }, [userRole, navigate])
 
-  const handleLogin = (e: React.FormEvent) => {
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (login(email, pass)) {
+    setSubmitting(true)
+    setError('')
+
+    const result = await login(email, pass)
+    setSubmitting(false)
+
+    if (result.success) {
       const userObj = {
         'admin@demo.com': '/admin',
         'staff@demo.com': '/dashboard',
         'staff2@demo.com': '/dashboard'
       } as Record<string, string>
-      
+
       navigate(userObj[email] || '/')
     } else {
-      setError('Tài khoản hoặc mật khẩu không đúng')
+      setError(result.error || 'Tài khoản hoặc mật khẩu không đúng')
     }
   }
 
@@ -74,8 +81,8 @@ export default function Login() {
             />
           </div>
 
-          <button type="submit" style={{ width: '100%', padding: '14px', background: '#0b57d0', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', marginTop: '8px' }}>
-            Đăng nhập
+          <button type="submit" disabled={submitting} style={{ width: '100%', padding: '14px', background: '#0b57d0', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', marginTop: '8px' }}>
+            {submitting ? 'Đang đăng nhập...' : 'Đăng nhập'}
           </button>
         </form>
 
