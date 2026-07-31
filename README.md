@@ -5,6 +5,7 @@ tự trả lời khi đủ căn cứ tài liệu, và chuyển nhân viên kèm 
 cậy hoặc cần xử lý thủ công — kèm dashboard vận hành cho nhân viên/quản trị.
 
 **Video demo (≤5 phút):** [Xem trên Google Drive](https://drive.google.com/file/d/1HPB5TWuCOM8O6351oXVm4sCIV07Uo28e/view?usp=sharing)
+
 **Sản phẩm triển khai:** Chưa deploy public — chạy local qua Docker (xem hướng dẫn bên dưới)
 
 ---
@@ -167,5 +168,4 @@ docs/
 
 - **Đa kênh**: chỉ `web_chat` có giao diện thật; `email`/`messaging_app`/`internal_system` mới dừng ở mức API hỗ trợ tham số, chưa có connector.
 - **Xử lý đồng thời**: pipeline AI (Gemini, Qdrant, Redis cấu hình) gọi đồng bộ ngay trong request — nhiều khách gửi tin cùng lúc có thể bị dồn độ trễ, chưa tối ưu bằng threadpool/client async.
-- **Test frontend**: mới phủ `Chat`/`Login`, chưa có cho `Dashboard`/`Admin`.
 
