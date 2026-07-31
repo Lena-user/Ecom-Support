@@ -138,13 +138,15 @@ def classify_message(message: str, channel: str) -> dict:
         import traceback
         logger.error(f"Gemini classify error: {e}")
         logger.error(traceback.format_exc())
-        # Fallback an toàn — escalate khi không chắc chắn
+        # Fallback an toàn — escalate khi không chắc chắn. Chỉ ghi lỗi chi tiết
+        # vào log server (ở trên) — reasoning hiển thị cho nhân viên phải ngắn gọn,
+        # không lộ nguyên văn lỗi kỹ thuật (vd JSON lỗi quota của Gemini).
         return {
             "classification": "info_inquiry",
             "priority": "medium",
             "has_sufficient_info": True,
             "requires_human": False,
-            "reasoning": f"Fallback do lỗi API: {e}",
+            "reasoning": "Lỗi hệ thống khi gọi Gemini, đã dùng phân loại mặc định.",
         }
 
 
@@ -233,14 +235,17 @@ def generate_rag_response(message: str, documents: list[dict]) -> dict:
 
     except Exception as e:
         logger.error(f"Gemini RAG response error: {e}")
-        # Fallback an toàn — không chắc chắn thì phải chuyển người, không tự bịa
+        # Fallback an toàn — không chắc chắn thì phải chuyển người, không tự bịa.
+        # Chỉ ghi lỗi chi tiết vào log server (ở trên) — reasoning hiển thị cho
+        # nhân viên phải ngắn gọn, không lộ nguyên văn lỗi kỹ thuật (vd JSON lỗi
+        # quota của Gemini có thể dài hàng trăm ký tự).
         return {
             "answer": (
                 "Xin lỗi, hệ thống đang gặp sự cố khi xử lý câu hỏi của bạn. "
                 "Yêu cầu của bạn sẽ được chuyển cho nhân viên hỗ trợ."
             ),
             "has_sufficient_grounding": False,
-            "reasoning": f"Lỗi hệ thống khi gọi Gemini: {e}",
+            "reasoning": "Lỗi hệ thống khi gọi Gemini, không thể đánh giá độ tin cậy câu trả lời.",
         }
 
 

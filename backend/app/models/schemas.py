@@ -12,6 +12,7 @@ class SupportRequest(BaseModel):
     )
     message: str = Field(..., min_length=1, description="Nội dung yêu cầu")
     metadata: dict = Field(default_factory=dict, description="Thông tin bổ sung")
+    attachment_url: str | None = Field(default=None, description="URL ảnh đính kèm (nếu có)")
 
 
 class SupportResponse(BaseModel):

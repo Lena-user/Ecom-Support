@@ -38,9 +38,16 @@ Các câu dưới đây được dùng làm test tự động ở `backend/tests
 | `staff@demo.com` | `123` | Nhân viên (Linh Nguyễn) |
 | `staff2@demo.com` | `123` | Nhân viên (Minh Trần) |
 
+Đây là dữ liệu thật lưu ở Redis (không hardcode) — admin có thể thêm/xoá tài khoản qua tab
+**Quản lý nhân sự**, tài khoản mới đăng nhập được ngay không cần restart backend.
+
 ## 4. Gợi ý kịch bản demo (≤5 phút)
 
-1. Vào `/chat` (không đăng nhập) — hỏi câu "đổi trả" → nhận trả lời tự động có trích nguồn.
+1. Vào `/chat` (không đăng nhập) — hỏi câu "đổi trả" → nhận trả lời tự động có trích nguồn, bấm 👍 ở widget đánh giá bên dưới để demo CSAT.
 2. Hỏi câu "bảo hành pin" (ngoài KB) → chuyển nhân viên, thấy tin nhắn báo đang chờ hỗ trợ.
-3. Đăng nhập `staff@demo.com` ở `/dashboard` → thấy ca vừa escalate, xem lý do chuyển + log AI, bấm "Tiếp nhận" → chat trực tiếp với khách.
-4. Đăng nhập `admin@demo.com` ở `/admin` → tab Tổng quan (số liệu thật vừa tạo), tab Knowledge Base (thấy câu "bảo hành pin" trong danh sách khoảng trống kiến thức) → thêm tài liệu trả lời → hỏi lại câu tương tự ở `/chat`, lần này tự trả lời được.
+3. Bấm nút đính kèm (ghim giấy), chọn 1 ảnh, gõ "Sản phẩm giao tới bị vỡ, mình gửi ảnh đính kèm" → gửi → ảnh hiện trong bong bóng chat, ticket chuyển nhân viên do "khiếu nại" ưu tiên cao.
+4. Đăng nhập `staff@demo.com` ở `/dashboard` → nghe âm thanh + thấy 2 ca mới trong "Cần xử lý", mở ca khiếu nại → xem lý do chuyển + ảnh đính kèm hiển thị cạnh tin nhắn khách → bấm "Tiếp nhận" → chat trực tiếp với khách → "Kết thúc".
+5. Đăng nhập `admin@demo.com` ở `/admin` → tab Tổng quan (số liệu + tỷ lệ CSAT thật vừa tạo), tab Knowledge Base (thấy câu "bảo hành pin" trong danh sách khoảng trống kiến thức) → thêm tài liệu trả lời → hỏi lại câu tương tự ở `/chat`, lần này tự trả lời được.
+
+Kịch bản chi tiết hơn (lời thoại + timecode) không thuộc phạm vi tài liệu kỹ thuật này —
+soạn riêng tuỳ mục đích trình bày (bảo vệ đồ án / phỏng vấn / giới thiệu sản phẩm).

@@ -50,12 +50,14 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/scripts:/app/scripts
+      - uploads_data:/app/uploads
     networks:
       - ecom-network
 
 volumes:
   redis_data:
   qdrant_data:
+  uploads_data:
 
 networks:
   ecom-network:

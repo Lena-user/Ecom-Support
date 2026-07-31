@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { ArrowUp, User, Sparkles, ShieldAlert, Headset, Bot } from 'lucide-react'
+import { ArrowUp, User, ShieldAlert, Headset, ThumbsUp, ThumbsDown, Paperclip, X, Plus } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useAuth } from '../AuthContext'
 import { API_BASE, WS_BASE } from '../config'
 
@@ -8,16 +10,26 @@ interface Message {
   id: string;
   role: 'user' | 'bot';
   content: string;
+  sender?: 'ai' | 'staff'; // chỉ có ý nghĩa khi role === 'bot' — quyết định avatar hiển thị
+  attachment_url?: string;
 }
 
 // ── Lấy hoặc tạo guestId ổn định, lưu vào sessionStorage ──────────
+const GUEST_ID_KEY = 'ecom_guest_id'
+
 function getOrCreateGuestId(): string {
-  const key = 'ecom_guest_id'
-  let id = sessionStorage.getItem(key)
+  let id = sessionStorage.getItem(GUEST_ID_KEY)
   if (!id) {
     id = 'GUEST_' + Date.now() + '_' + Math.floor(Math.random() * 1000)
-    sessionStorage.setItem(key, id)
+    sessionStorage.setItem(GUEST_ID_KEY, id)
   }
+  return id
+}
+
+// Luôn tạo mới (không đọc lại id cũ) — dùng khi khách bấm "Cuộc hội thoại mới"
+function createNewGuestId(): string {
+  const id = 'GUEST_' + Date.now() + '_' + Math.floor(Math.random() * 1000)
+  sessionStorage.setItem(GUEST_ID_KEY, id)
   return id
 }
 
@@ -26,14 +38,19 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [assignedTo, setAssignedTo] = useState<string | null>(null)
-  
+  const [showRating, setShowRating] = useState(false)
+  const [ratedValue, setRatedValue] = useState<'up' | 'down' | null>(null)
+  const [attachedFile, setAttachedFile] = useState<File | null>(null)
+  const [attachedPreview, setAttachedPreview] = useState<string | null>(null)
+
   // Guest ID ổn định: giữ nguyên khi refresh/thoát tab rồi mở lại (cùng tab)
-  const [guestId] = useState(getOrCreateGuestId)
-  
+  const [guestId, setGuestId] = useState(getOrCreateGuestId)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const msgCounter = useRef(0)
   const closedIntentionally = useRef(false)   // cờ ngăn reconnect khi cleanup
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
   const { logout } = useAuth()
 
@@ -49,10 +66,12 @@ export default function Chat() {
 
         // Khôi phục lịch sử tin nhắn
         if (data.messages?.length > 0) {
-          const restored: Message[] = data.messages.map((m: {role: string, content: string}, i: number) => ({
+          const restored: Message[] = data.messages.map((m: {role: string, content: string, sender?: 'ai' | 'staff', attachment_url?: string}, i: number) => ({
             id: `restored-${i}`,
             role: m.role as 'user' | 'bot',
             content: m.content,
+            sender: m.sender,
+            attachment_url: m.attachment_url ? `${API_BASE}${m.attachment_url}` : undefined,
           }))
           setMessages(restored)
         }
@@ -68,7 +87,7 @@ export default function Chat() {
             // Chỉ thêm nếu chưa có message chờ
             const hasWaiting = prev.some(m => m.content.includes('đang được chuyển đến nhân viên'))
             if (!hasWaiting) {
-              return [...prev, { id: nextId(), role: 'bot', content: 'Yêu cầu của bạn đang được chuyển đến nhân viên hỗ trợ, vui lòng chờ trong giây lát.' }]
+              return [...prev, { id: nextId(), role: 'bot', content: 'Yêu cầu của bạn đang được chuyển đến nhân viên hỗ trợ, vui lòng chờ trong giây lát.', sender: 'ai' }]
             }
             return prev
           })
@@ -98,9 +117,12 @@ export default function Chat() {
             setAssignedTo(data.assigned_to)
           } else if (data.type === 'session:resolved') {
             setAssignedTo(null)
-            setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Cuộc trò chuyện đã kết thúc. Cảm ơn bạn đã liên hệ!' }])
+            setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Cuộc trò chuyện đã kết thúc. Cảm ơn bạn đã liên hệ!', sender: 'ai' }])
+            setRatedValue(null)
+            setShowRating(true)
           } else if (data.type === 'message' && data.role === 'bot') {
-            setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: data.content }])
+            // Tin nhắn role=bot qua WS luôn do nhân viên gửi (Dashboard) — AI trả lời qua /submit, không qua WS
+            setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: data.content, sender: 'staff' }])
             setLoading(false)
           }
         } catch (err) {
@@ -133,15 +155,36 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  // ── Đính kèm ảnh ─────────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setAttachedFile(file)
+    setAttachedPreview(URL.createObjectURL(file))
+  }
+
+  const clearAttachment = () => {
+    if (attachedPreview) URL.revokeObjectURL(attachedPreview)
+    setAttachedFile(null)
+    setAttachedPreview(null)
+  }
+
   // ── Send message ─────────────────────────────────────────────────
   const handleSend = async (text: string = input) => {
-    if (!text.trim()) return
-
     const userMsg = text.trim()
+    if (!userMsg && !attachedFile) return
+
+    const fileToSend = attachedFile
+    const previewToSend = attachedPreview ?? undefined
     setInput('')
-    
-    setMessages(prev => [...prev, { id: nextId(), role: 'user', content: userMsg }])
-    
+    setShowRating(false)
+    setRatedValue(null)
+    setAttachedFile(null)
+    setAttachedPreview(null)
+
+    setMessages(prev => [...prev, { id: nextId(), role: 'user', content: userMsg, attachment_url: previewToSend }])
+
     // Nếu đang được nhân viên hỗ trợ → gửi qua WS, KHÔNG qua AI pipeline
     if (assignedTo && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'message', role: 'user', content: userMsg }))
@@ -151,28 +194,67 @@ export default function Chat() {
     // Gửi qua AI pipeline
     setLoading(true)
     try {
+      let attachmentUrl: string | undefined
+      if (fileToSend) {
+        const form = new FormData()
+        form.append('file', fileToSend)
+        const uploadRes = await fetch(`${API_BASE}/api/support/upload`, { method: 'POST', body: form })
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json()
+          attachmentUrl = uploadData.url
+        }
+      }
+
       const response = await fetch(`${API_BASE}/api/support/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: guestId,
           channel: 'web_chat',
-          message: userMsg
+          message: userMsg || '(Đã gửi ảnh đính kèm)',
+          attachment_url: attachmentUrl,
         })
       })
 
       const data = await response.json()
-      
+
       if (data.status === 'PENDING_ESCALATION') {
-        setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Yêu cầu của bạn đang được chuyển đến nhân viên hỗ trợ, vui lòng chờ trong giây lát.' }])
+        setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Yêu cầu của bạn đang được chuyển đến nhân viên hỗ trợ, vui lòng chờ trong giây lát.', sender: 'ai' }])
       } else {
-        setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: data.response || 'Xin lỗi, đã có lỗi xảy ra.' }])
+        setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: data.response || 'Xin lỗi, đã có lỗi xảy ra.', sender: 'ai' }])
+        setShowRating(true)
       }
     } catch (error) {
-      setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Lỗi kết nối đến máy chủ API.' }])
+      console.error(error)
+      setMessages(prev => [...prev, { id: nextId(), role: 'bot', content: 'Lỗi kết nối đến máy chủ API.', sender: 'ai' }])
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleRate = async (rating: 'up' | 'down') => {
+    setRatedValue(rating)
+    try {
+      await fetch(`${API_BASE}/api/support/tickets/${guestId}/rate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating }),
+      })
+    } catch (err) {
+      console.error('Rate ticket failed:', err)
+    }
+  }
+
+  // ── Bắt đầu cuộc hội thoại mới ─────────────────────────────────────
+  const handleNewConversation = () => {
+    clearAttachment()
+    setInput('')
+    setMessages([])
+    setAssignedTo(null)
+    setShowRating(false)
+    setRatedValue(null)
+    setLoading(false)
+    setGuestId(createNewGuestId())
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -200,9 +282,16 @@ export default function Chat() {
             </span>
           )}
         </div>
-        <button onClick={() => { logout(); navigate('/login'); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#444746', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem' }}>
-          <ShieldAlert size={16} /> Cổng Nhân viên
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {messages.length > 0 && !assignedTo && (
+            <button onClick={handleNewConversation} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#444746', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem' }}>
+              <Plus size={16} /> Cuộc hội thoại mới
+            </button>
+          )}
+          <button onClick={() => { logout(); navigate('/login'); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#444746', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem' }}>
+            <ShieldAlert size={16} /> Cổng Nhân viên
+          </button>
+        </div>
       </header>
 
       <main style={{ flex: 1, width: '100%', maxWidth: '800px', display: 'flex', flexDirection: 'column', paddingTop: '70px', paddingBottom: '120px', position: 'relative', overflow: 'hidden' }}>
@@ -210,7 +299,7 @@ export default function Chat() {
         {messages.length === 0 ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 20px' }}>
             <img src="/robin.jpg" alt="Robin" style={{ width: '60px', height: '60px', borderRadius: '16px', marginBottom: '24px', objectFit: 'cover', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 500, color: '#1e1e1e', marginBottom: '32px' }}>Hi, I'm Robin. How can I help you today?</h2>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 500, color: '#1e1e1e', marginBottom: '32px' }}>Xin chào, mình là Robin. Mình có thể giúp gì cho bạn hôm nay?</h2>
             
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', width: '100%', maxWidth: '600px' }}>
               {suggestions.map((s, i) => (
@@ -224,22 +313,42 @@ export default function Chat() {
           <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
             {messages.map(msg => (
               <div key={msg.id} style={{ display: 'flex', gap: '16px', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
-                <div style={{ width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'bot' ? (assignedTo ? '#137333' : 'transparent') : '#f0f4f9', color: msg.role === 'bot' ? '#fff' : '#444746', overflow: 'hidden' }}>
-                  {msg.role === 'bot' ? (assignedTo ? <Headset size={20} /> : <img src="/robin.jpg" alt="Robin" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <User size={20} />}
+                <div style={{ width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'bot' ? (msg.sender === 'staff' ? '#137333' : 'transparent') : '#f0f4f9', color: msg.role === 'bot' ? '#fff' : '#444746', overflow: 'hidden' }}>
+                  {msg.role === 'bot' ? (msg.sender === 'staff' ? <Headset size={20} /> : <img src="/robin.jpg" alt="Robin" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <User size={20} />}
                 </div>
                 
-                <div style={{ 
-                  padding: msg.role === 'user' ? '12px 20px' : '6px 0', 
-                  background: msg.role === 'user' ? '#e8f0fe' : 'transparent',
-                  color: '#1e1e1e',
-                  borderRadius: '24px',
-                  borderBottomRightRadius: msg.role === 'user' ? '4px' : '24px',
-                  fontSize: '1rem',
-                  lineHeight: '1.6',
+                <div style={{
+                  display: 'flex', flexDirection: 'column', gap: '6px',
+                  alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
                   maxWidth: '80%',
-                  whiteSpace: 'pre-wrap'
                 }}>
-                  {msg.content}
+                  {msg.attachment_url && (
+                    <a href={msg.attachment_url} target="_blank" rel="noreferrer">
+                      <img
+                        src={msg.attachment_url}
+                        alt="Ảnh đính kèm"
+                        style={{ maxWidth: '260px', maxHeight: '260px', borderRadius: '16px', display: 'block', cursor: 'zoom-in', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+                      />
+                    </a>
+                  )}
+                  {msg.content && (
+                    <div style={{
+                      padding: msg.role === 'user' ? '12px 20px' : '6px 0',
+                      background: msg.role === 'user' ? '#e8f0fe' : 'transparent',
+                      color: '#1e1e1e',
+                      borderRadius: '24px',
+                      borderBottomRightRadius: msg.role === 'user' ? '4px' : '24px',
+                      fontSize: '1rem',
+                      lineHeight: '1.6',
+                      whiteSpace: msg.role === 'user' ? 'pre-wrap' : 'normal'
+                    }}>
+                      {msg.role === 'bot' ? (
+                        <div className="markdown-content">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        </div>
+                      ) : msg.content}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -254,36 +363,91 @@ export default function Chat() {
                 </div>
               </div>
             )}
+
+            {showRating && !loading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingLeft: '52px', fontSize: '0.88rem', color: '#5f6368' }}>
+                {ratedValue ? (
+                  <span>Cảm ơn bạn đã đánh giá!</span>
+                ) : (
+                  <>
+                    <span>Câu trả lời có hữu ích không?</span>
+                    <button
+                      onClick={() => handleRate('up')}
+                      aria-label="Hữu ích"
+                      style={{ background: '#f4f7fb', border: '1px solid #e0e0e0', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#137333' }}
+                    >
+                      <ThumbsUp size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleRate('down')}
+                      aria-label="Không hữu ích"
+                      style={{ background: '#f4f7fb', border: '1px solid #e0e0e0', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#c5221f' }}
+                    >
+                      <ThumbsDown size={16} />
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </div>
         )}
 
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '24px', background: 'linear-gradient(to top, white 80%, transparent)', pointerEvents: 'none' }}>
-          <div style={{ 
-            background: '#f4f7fb', borderRadius: '24px', padding: '14px 64px 14px 24px', position: 'relative', 
+          <input
+            type="file"
+            accept="image/*"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            hidden
+          />
+          <div style={{ maxWidth: 'none', pointerEvents: 'auto' }}>
+            {attachedPreview && (
+              <div style={{ display: 'inline-flex', position: 'relative', marginBottom: '8px' }}>
+                <img src={attachedPreview} alt="Xem trước ảnh đính kèm" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '10px', border: '1px solid #e0e0e0' }} />
+                <button
+                  onClick={clearAttachment}
+                  aria-label="Bỏ ảnh đính kèm"
+                  style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#1e1e1e', color: '#fff', border: 'none', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+          </div>
+          <div style={{
+            background: '#f4f7fb', borderRadius: '24px', padding: '10px 12px 10px 16px',
             border: '1px solid #e0e0e0', boxShadow: '0 4px 12px rgba(0,0,0,0.03)', pointerEvents: 'auto',
-            display: 'flex', alignItems: 'center'
+            display: 'flex', alignItems: 'center', gap: '8px'
           }}>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Đính kèm ảnh"
+              disabled={loading}
+              style={{ flexShrink: 0, width: '24px', height: '24px', background: 'transparent', border: 'none', color: '#5f6368', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+            >
+              <Paperclip size={20} />
+            </button>
             <textarea
-              placeholder="Ask me anything..."
+              placeholder="Hỏi mình bất cứ điều gì..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={loading}
-              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', fontSize: '1rem', resize: 'none', maxHeight: '120px', minHeight: '24px', padding: 0, fontFamily: 'inherit', color: '#1e1e1e', lineHeight: '24px' }}
+              style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontSize: '1rem', resize: 'none', maxHeight: '120px', minHeight: '24px', padding: 0, fontFamily: 'inherit', color: '#1e1e1e', lineHeight: '24px' }}
               rows={1}
             />
-            {input.trim() && (
-              <button 
+            {(input.trim() || attachedFile) && (
+              <button
                 onClick={() => handleSend()}
                 disabled={loading}
-                style={{ position: 'absolute', right: '12px', bottom: '8px', background: '#1e1e1e', color: '#fff', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                style={{ flexShrink: 0, background: '#1e1e1e', color: '#fff', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
               >
                 <ArrowUp size={18} strokeWidth={2.5} />
               </button>
             )}
           </div>
-          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#888', marginTop: '12px' }}>AI can make mistakes. Verify important information.</p>
+          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#888', marginTop: '12px' }}>AI có thể mắc sai sót. Hãy kiểm tra lại thông tin quan trọng.</p>
         </div>
       </main>
     </div>

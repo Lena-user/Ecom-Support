@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from qdrant_client import QdrantClient
 
+from app import staff_store, uploads
 from app.api.auth_routes import router as auth_router
 from app.api.routes import router as support_router
 from app.api.ws import ws_router
@@ -28,6 +30,9 @@ async def lifespan(app: FastAPI):
         port=settings.redis_port,
         decode_responses=True,
     )
+
+    # Seed tài khoản demo nếu store rỗng (không ghi đè nếu đã có dữ liệu)
+    await staff_store.seed_defaults()
 
     yield
 
@@ -58,6 +63,10 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(support_router)
 app.include_router(ws_router)
+
+# ---------- Static serving cho ảnh đính kèm ---------- #
+uploads.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads.UPLOAD_DIR)), name="uploads")
 
 
 # ---------- Routes ---------- #

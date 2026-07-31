@@ -12,6 +12,9 @@ tenacity>=9.0.0
 PyJWT>=2.9.0
 bcrypt>=4.2.0
 
+# Upload ảnh đính kèm
+python-multipart>=0.0.9
+
 # Dev/test
 pytest>=8.3.0
 pytest-mock>=3.14.0

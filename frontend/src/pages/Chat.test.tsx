@@ -6,13 +6,16 @@ import { AuthProvider } from '../AuthContext'
 import Chat from './Chat'
 
 class FakeWebSocket {
+  url: string
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
   readyState = 1
 
-  constructor(public url: string) {}
+  constructor(url: string) {
+    this.url = url
+  }
   send() {}
   close() {
     this.readyState = 3

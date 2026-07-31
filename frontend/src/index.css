@@ -285,6 +285,54 @@ body {
   40% { transform: scale(1); }
 }
 
+/* Markdown content trong tin nhắn bot — dựng lại spacing vì có global reset margin/padding:0 */
+.markdown-content p {
+  margin: 0 0 12px 0;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0 0 12px 0;
+  padding-left: 22px;
+}
+.markdown-content li {
+  margin-bottom: 4px;
+}
+.markdown-content li:last-child {
+  margin-bottom: 0;
+}
+.markdown-content strong {
+  font-weight: 600;
+}
+.markdown-content a {
+  color: var(--accent-primary);
+}
+.markdown-content code {
+  background: var(--bg-input);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.markdown-content pre {
+  background: var(--bg-input);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0 0 12px 0;
+}
+.markdown-content pre code {
+  background: none;
+  padding: 0;
+}
+.markdown-content blockquote {
+  margin: 0 0 12px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
 /* Fade in animation */
 .fade-in {
   animation: fadeIn 0.4s ease-out forwards;

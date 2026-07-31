@@ -1,8 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Inbox, CheckCircle, Clock, LogOut, Activity, UserCheck, XCircle, Send, User, Headset, MessageCircle, Search } from 'lucide-react'
+import { Inbox, LogOut, Activity, UserCheck, XCircle, Send, User, MessageCircle } from 'lucide-react'
 import { useAuth } from '../AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE, WS_BASE } from '../config'
+
+interface ChatMessage {
+  role: 'user' | 'bot';
+  content: string;
+  sender?: 'ai' | 'staff' | null;
+  attachment_url?: string | null;
+}
 
 interface Ticket {
   id: string;
@@ -13,8 +20,21 @@ interface Ticket {
   createdAt: string;
   log: string[];
   message?: string;
+  attachment_url?: string | null;
+  messages?: ChatMessage[];
   staff_assigned?: string | null;
   escalation_reason?: string;
+}
+
+function formatTicketTime(iso: string): string {
+  const dt = new Date(iso)
+  if (isNaN(dt.getTime())) return iso
+  const now = new Date()
+  const isToday = dt.toDateString() === now.toDateString()
+  const hhmm = dt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return hhmm
+  const ddmm = dt.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
+  return `${ddmm} ${hhmm}`
 }
 
 type FilterTab = 'ALL' | 'PENDING' | 'HANDLING' | 'RESOLVED'
@@ -23,9 +43,7 @@ export default function Dashboard() {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [selected, setSelected] = useState<Ticket | null>(null)
   const [filterTab, setFilterTab] = useState<FilterTab>('ALL')
-  const [loading, setLoading] = useState(true)
   const [replyText, setReplyText] = useState('')
-  const [liveMessages, setLiveMessages] = useState<{role: string, content: string}[]>([])
   const [showLog, setShowLog] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const wsTicketIdRef = useRef<string | null>(null)
@@ -33,6 +51,45 @@ export default function Dashboard() {
   const { logout, userName, token } = useAuth()
   const navigate = useNavigate()
   const authHeaders = { Authorization: `Bearer ${token}` }
+
+  // ── Thông báo ticket mới (âm thanh + browser notification) ─────────
+  const prevPendingIdsRef = useRef<Set<string> | null>(null)
+
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
+  }, [])
+
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      const ctx = new AudioCtx()
+      const oscillator = ctx.createOscillator()
+      const gain = ctx.createGain()
+      oscillator.connect(gain)
+      gain.connect(ctx.destination)
+      oscillator.frequency.value = 880
+      gain.gain.setValueAtTime(0.15, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
+      oscillator.start()
+      oscillator.stop(ctx.currentTime + 0.4)
+    } catch (err) {
+      console.error('Play notification sound failed:', err)
+    }
+  }
+
+  const notifyNewTickets = (newTickets: Ticket[]) => {
+    playNotificationSound()
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const first = newTickets[0]
+      new Notification('Có ca cần xử lý mới', {
+        body: newTickets.length > 1
+          ? `${newTickets.length} khách hàng đang chờ hỗ trợ`
+          : `Khách hàng ${first.customer} đang chờ hỗ trợ`,
+      })
+    }
+  }
 
   // ── WebSocket ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -55,8 +112,9 @@ export default function Dashboard() {
     }
 
     if (ticketId !== wsTicketIdRef.current) {
+      // Chuyển sang ticket khác — chỉ xoá nháp đang gõ, KHÔNG xoá lịch sử chat:
+      // lịch sử luôn lấy từ selected.messages (dữ liệu server, đầy đủ bối cảnh)
       setReplyText('')
-      setLiveMessages([])
       wsTicketIdRef.current = ticketId
     }
 
@@ -67,7 +125,12 @@ export default function Dashboard() {
         try {
           const data = JSON.parse(event.data)
           if (data.type === 'message' && data.role === 'user') {
-            setLiveMessages(prev => [...prev, { role: 'user', content: data.content }])
+            // Cập nhật ngay (optimistic) vào selected.messages — lần poll tiếp
+            // theo (mỗi 5s) sẽ thay bằng dữ liệu chính thức từ server, không
+            // trùng lặp vì poll luôn ghi đè toàn bộ mảng messages.
+            setSelected(prev => (prev && prev.id === ticketId)
+              ? { ...prev, messages: [...(prev.messages ?? []), { role: 'user', content: data.content, sender: null, attachment_url: null }] }
+              : prev)
           }
         } catch (e) {
           console.error(e)
@@ -88,11 +151,10 @@ export default function Dashboard() {
   // ── Auto-scroll chat ──────────────────────────────────────────────
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [liveMessages])
+  }, [selected?.messages])
 
   // ── Fetch tickets ─────────────────────────────────────────────────
   const fetchTickets = useCallback(async () => {
-    setLoading(true)
     try {
       const res = await fetch(`${API_BASE}/api/support/tickets`, { headers: authHeaders })
       if (res.status === 401) {
@@ -107,10 +169,16 @@ export default function Dashboard() {
         const fresh = data.find(t => t.id === prev.id)
         return fresh ?? (data.length > 0 ? data[0] : null)
       })
+
+      const pending = data.filter(t => t.status === 'PENDING_ESCALATION')
+      const pendingIds = new Set(pending.map(t => t.id))
+      if (prevPendingIdsRef.current !== null) {
+        const newlyPending = pending.filter(t => !prevPendingIdsRef.current!.has(t.id))
+        if (newlyPending.length > 0) notifyNewTickets(newlyPending)
+      }
+      prevPendingIdsRef.current = pendingIds
     } catch (err) {
       console.error(err)
-    } finally {
-      setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
@@ -135,10 +203,13 @@ export default function Dashboard() {
   }
 
   const handleSendLive = () => {
-    if (!replyText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (!replyText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !selected) return
     const msg = replyText.trim()
+    const ticketId = selected.id
     wsRef.current.send(JSON.stringify({ type: 'message', role: 'bot', content: msg }))
-    setLiveMessages(prev => [...prev, { role: 'bot', content: msg }])
+    setSelected(prev => (prev && prev.id === ticketId)
+      ? { ...prev, messages: [...(prev.messages ?? []), { role: 'bot', content: msg, sender: 'staff', attachment_url: null }] }
+      : prev)
     setReplyText('')
   }
 
@@ -303,7 +374,7 @@ export default function Dashboard() {
                       }}>
                         {t.customer?.substring(0, 16)}
                       </span>
-                      <span style={{ fontSize: '0.75rem', color: '#9aa0a6', flexShrink: 0 }}>{t.createdAt}</span>
+                      <span style={{ fontSize: '0.75rem', color: '#9aa0a6', flexShrink: 0 }}>{formatTicketTime(t.createdAt)}</span>
                     </div>
                     <div style={{
                       fontSize: '0.85rem', color: '#5f6368', marginTop: '2px',
@@ -426,31 +497,13 @@ export default function Dashboard() {
                 alignSelf: 'center', background: '#e8eaed', padding: '4px 14px',
                 borderRadius: '14px', fontSize: '0.78rem', color: '#5f6368', marginBottom: '8px',
               }}>
-                Ticket {selected.id?.substring(0, 12)} • {selected.createdAt}
+                Ticket {selected.id?.substring(0, 12)} • {formatTicketTime(selected.createdAt)}
               </div>
 
-              {/* Initial customer message */}
-              {selected.message && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
-                  <div style={{
-                    width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0,
-                    background: '#e8f0fe', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#0b57d0',
-                  }}>
-                    <User size={14} />
-                  </div>
-                  <div style={{
-                    background: '#e4e6eb', padding: '10px 14px', borderRadius: '18px',
-                    borderBottomLeftRadius: '4px', maxWidth: '70%', fontSize: '0.92rem',
-                    lineHeight: 1.45, color: '#1e1e1e',
-                  }}>
-                    {selected.message}
-                  </div>
-                </div>
-              )}
-
-              {/* Live chat messages */}
-              {liveMessages.map((m, i) => (
+              {/* Toàn bộ lịch sử hội thoại — AI_HANDLING lẫn live chat sau khi
+                  tiếp nhận, để nhân viên luôn thấy đủ bối cảnh (kể cả ảnh đính
+                  kèm ở bất kỳ tin nhắn nào, không chỉ tin đầu/cuối) */}
+              {(selected.messages ?? []).map((m, i) => (
                 <div key={i} style={{
                   display: 'flex', gap: '8px', alignItems: 'flex-end',
                   flexDirection: m.role === 'bot' ? 'row-reverse' : 'row',
@@ -465,27 +518,37 @@ export default function Dashboard() {
                     </div>
                   )}
                   <div style={{
-                    padding: '10px 14px', borderRadius: '18px', maxWidth: '70%',
-                    fontSize: '0.92rem', lineHeight: 1.45,
-                    background: m.role === 'bot' ? '#0b57d0' : '#e4e6eb',
-                    color: m.role === 'bot' ? '#fff' : '#1e1e1e',
-                    borderBottomRightRadius: m.role === 'bot' ? '4px' : '18px',
-                    borderBottomLeftRadius: m.role === 'user' ? '4px' : '18px',
+                    display: 'flex', flexDirection: 'column', gap: '6px',
+                    alignItems: m.role === 'bot' ? 'flex-end' : 'flex-start', maxWidth: '70%',
                   }}>
-                    {m.content}
+                    {m.attachment_url && (
+                      <a href={`${API_BASE}${m.attachment_url}`} target="_blank" rel="noreferrer">
+                        <img
+                          src={`${API_BASE}${m.attachment_url}`}
+                          alt="Ảnh đính kèm từ khách hàng"
+                          style={{
+                            width: '220px', height: '220px', objectFit: 'cover',
+                            borderRadius: '12px', display: 'block', cursor: 'zoom-in',
+                            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                          }}
+                        />
+                      </a>
+                    )}
+                    {m.content && (
+                      <div style={{
+                        padding: '10px 14px', borderRadius: '18px',
+                        fontSize: '0.92rem', lineHeight: 1.45,
+                        background: m.role === 'bot' ? '#0b57d0' : '#e4e6eb',
+                        color: m.role === 'bot' ? '#fff' : '#1e1e1e',
+                        borderBottomRightRadius: m.role === 'bot' ? '4px' : '18px',
+                        borderBottomLeftRadius: m.role === 'user' ? '4px' : '18px',
+                      }}>
+                        {m.content}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
-
-              {/* Placeholder when no live messages & HUMAN_HANDLING */}
-              {selected.status === 'HUMAN_HANDLING' && liveMessages.length === 0 && (
-                <div style={{
-                  alignSelf: 'center', color: '#9aa0a6', fontSize: '0.85rem',
-                  fontStyle: 'italic', margin: '24px 0',
-                }}>
-                  Đang chờ tin nhắn từ khách hàng...
-                </div>
-              )}
 
               {/* Placeholder when PENDING */}
               {selected.status === 'PENDING_ESCALATION' && (
@@ -494,7 +557,7 @@ export default function Dashboard() {
                   fontWeight: 500, margin: '24px 0', textAlign: 'center',
                   padding: '16px 24px', background: '#fce8e6', borderRadius: '12px',
                 }}>
-                  ⚠️ Khách hàng đang chờ được hỗ trợ. Bấm "Tiếp nhận" để bắt đầu chat.
+                  Khách hàng đang chờ được hỗ trợ. Bấm "Tiếp nhận" để bắt đầu chat.
                 </div>
               )}
 
@@ -505,7 +568,7 @@ export default function Dashboard() {
                   fontWeight: 500, margin: '24px 0', textAlign: 'center',
                   padding: '16px 24px', background: '#e6f4ea', borderRadius: '12px',
                 }}>
-                  ✅ Case đã được giải quyết xong.
+                  Case đã được giải quyết xong.
                 </div>
               )}
 

@@ -1,8 +1,8 @@
 """Auth: JWT bearer token + xác thực mật khẩu bằng bcrypt.
 
-Danh sách tài khoản demo hardcode — giữ đúng 3 tài khoản cũ đang có ở
-frontend (AuthContext.tsx) nhưng giờ xác thực thật ở backend, mật khẩu
-được hash bcrypt thay vì so sánh plaintext phía client.
+Tài khoản staff/admin được lưu động trong Redis (app/staff_store.py) —
+seed sẵn 3 tài khoản demo lúc backend khởi động (xem main.py), Admin có
+thể thêm/xoá tài khoản thật qua UI.
 """
 
 import time
@@ -12,25 +12,18 @@ import bcrypt
 import jwt
 from fastapi import HTTPException, Request
 
+from app import staff_store
 from app.config import settings
 
 Role = Literal["admin", "staff"]
-
-_DEMO_PASSWORD_HASH = bcrypt.hashpw(b"123", bcrypt.gensalt()).decode()
-
-USERS: dict[str, dict] = {
-    "admin@demo.com": {"password_hash": _DEMO_PASSWORD_HASH, "role": "admin", "name": "Admin"},
-    "staff@demo.com": {"password_hash": _DEMO_PASSWORD_HASH, "role": "staff", "name": "Linh Nguyễn"},
-    "staff2@demo.com": {"password_hash": _DEMO_PASSWORD_HASH, "role": "staff", "name": "Minh Trần"},
-}
 
 ALGORITHM = "HS256"
 TOKEN_TTL_SECONDS = 8 * 3600
 
 
-def verify_password(email: str, password: str) -> dict | None:
+async def verify_password(email: str, password: str) -> dict | None:
     """Trả về thông tin user nếu email/password hợp lệ, None nếu không."""
-    user = USERS.get(email)
+    user = await staff_store.get(email)
     if not user:
         return None
     if not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):

@@ -21,7 +21,7 @@ class LoginResponse(BaseModel):
 
 @router.post("/login", response_model=LoginResponse)
 async def login(payload: LoginRequest):
-    user = verify_password(payload.email, payload.password)
+    user = await verify_password(payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
     token = create_access_token(email=payload.email, role=user["role"], name=user["name"])

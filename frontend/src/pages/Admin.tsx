@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { LayoutDashboard, Settings, Server, Users, LogOut, BookOpen, Pencil, Trash2 } from 'lucide-react'
+import { LayoutDashboard, Settings, Server, Users, LogOut, BookOpen, Pencil, Trash2, UserPlus } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts'
 import { useAuth } from '../AuthContext'
 import { useNavigate } from 'react-router-dom'
@@ -15,6 +15,9 @@ interface Stats {
   by_type_status: Record<string, { auto: number; escalate: number }>
   requests_by_hour: [string, number][]
   recent_logs: string[]
+  csat_positive: number
+  csat_negative: number
+  csat_total: number
 }
 
 interface Health {
@@ -42,11 +45,18 @@ interface KnowledgeGap {
   timestamp: number
 }
 
+interface StaffAccount {
+  email: string
+  name: string
+  role: 'staff' | 'admin'
+  ticket_count: number
+}
+
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('overview')
   const [stats, setStats] = useState<Stats | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
-  const { logout, token } = useAuth()
+  const { logout, token, userEmail } = useAuth()
   const navigate = useNavigate()
   const authHeaders = { Authorization: `Bearer ${token}` }
 
@@ -213,6 +223,76 @@ export default function Admin() {
     }
   }
 
+  // ── Quản lý nhân sự ───────────────────────────────────────────────────
+  const [staffList, setStaffList] = useState<StaffAccount[]>([])
+  const [staffEmail, setStaffEmail] = useState('')
+  const [staffName, setStaffName] = useState('')
+  const [staffPassword, setStaffPassword] = useState('')
+  const [staffRole, setStaffRole] = useState<'staff' | 'admin'>('staff')
+  const [staffError, setStaffError] = useState('')
+
+  const fetchStaff = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/support/staff`, { headers: authHeaders })
+      setStaffList(await res.json())
+    } catch (err) {
+      console.error('Fetch staff failed:', err)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  useEffect(() => {
+    if (activeTab === 'staff') fetchStaff()
+  }, [activeTab, fetchStaff])
+
+  const resetStaffForm = () => {
+    setStaffEmail('')
+    setStaffName('')
+    setStaffPassword('')
+    setStaffRole('staff')
+    setStaffError('')
+  }
+
+  const handleCreateStaff = async () => {
+    if (!staffEmail.trim() || !staffName.trim() || staffPassword.length < 3) {
+      setStaffError('Vui lòng nhập đủ email, tên, mật khẩu (tối thiểu 3 ký tự).')
+      return
+    }
+    setStaffError('')
+    try {
+      const res = await fetch(`${API_BASE}/api/support/staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ email: staffEmail.trim(), name: staffName.trim(), password: staffPassword, role: staffRole }),
+      })
+      if (res.status === 409) {
+        setStaffError('Email này đã tồn tại.')
+        return
+      }
+      resetStaffForm()
+      fetchStaff()
+    } catch (err) {
+      console.error('Create staff failed:', err)
+    }
+  }
+
+  const handleDeleteStaff = async (email: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/support/staff/${encodeURIComponent(email)}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(data.detail || 'Không thể xoá tài khoản này.')
+        return
+      }
+      fetchStaff()
+    } catch (err) {
+      console.error('Delete staff failed:', err)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', height: '100vh', backgroundColor: '#f4f7fb' }}>
       {/* Admin Sidebar */}
@@ -249,7 +329,7 @@ export default function Admin() {
         {activeTab === 'overview' && (
           <div>
             <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Tổng quan hệ thống</h1>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '24px', marginBottom: '32px' }}>
               <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                 <div style={{ color: '#888', fontSize: '0.9rem' }}>Tổng requests</div>
                 <div style={{ fontSize: '2rem', fontWeight: 600, color: '#0b57d0' }}>{stats?.total_requests ?? 0}</div>
@@ -261,6 +341,15 @@ export default function Admin() {
               <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                 <div style={{ color: '#888', fontSize: '0.9rem' }}>Số ca chuyển nhân viên</div>
                 <div style={{ fontSize: '2rem', fontWeight: 600, color: '#c5221f' }}>{stats?.escalated_count ?? 0}</div>
+              </div>
+              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                <div style={{ color: '#888', fontSize: '0.9rem' }}>Tỷ lệ hài lòng (CSAT)</div>
+                <div style={{ fontSize: '2rem', fontWeight: 600, color: '#0b57d0' }}>
+                  {stats && stats.csat_total > 0 ? `${Math.round((stats.csat_positive / stats.csat_total) * 100)}%` : '—'}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#9aa0a6', marginTop: '2px' }}>
+                  {stats?.csat_total ? `${stats.csat_positive}/${stats.csat_total} lượt đánh giá` : 'Chưa có đánh giá'}
+                </div>
               </div>
             </div>
 
@@ -491,29 +580,81 @@ export default function Admin() {
         {activeTab === 'staff' && (
           <div>
             <h1 style={{ fontSize: '1.5rem', marginBottom: '24px', color: '#1e1e1e' }}>Quản lý Nhân sự CSKH</h1>
+
+            <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '600px', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}><UserPlus size={18} /> Thêm tài khoản mới</h3>
+              {staffError && <div style={{ color: '#c5221f', background: '#fce8e6', padding: '10px 14px', borderRadius: '8px', fontSize: '0.85rem' }}>{staffError}</div>}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <input
+                  value={staffEmail}
+                  onChange={e => setStaffEmail(e.target.value)}
+                  placeholder="Email"
+                  style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                />
+                <input
+                  value={staffName}
+                  onChange={e => setStaffName(e.target.value)}
+                  placeholder="Tên hiển thị"
+                  style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                />
+                <input
+                  type="password"
+                  value={staffPassword}
+                  onChange={e => setStaffPassword(e.target.value)}
+                  placeholder="Mật khẩu"
+                  style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                />
+                <select
+                  value={staffRole}
+                  onChange={e => setStaffRole(e.target.value as 'staff' | 'admin')}
+                  style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+                >
+                  <option value="staff">Nhân viên</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <button
+                onClick={handleCreateStaff}
+                style={{ padding: '10px 20px', background: '#0b57d0', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, cursor: 'pointer', alignSelf: 'flex-start' }}
+              >
+                Thêm tài khoản
+              </button>
+            </div>
+
             <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e0e0e0', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                 <thead style={{ background: '#f8f9fa', borderBottom: '1px solid #e0e0e0' }}>
                   <tr>
                     <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}>Nhân viên</th>
                     <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}>Email</th>
+                    <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}>Vai trò</th>
                     <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}>Tickets xử lý</th>
-                    <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}>Thời gian trung bình (phút)</th>
+                    <th style={{ padding: '16px', fontWeight: 500, color: '#444746' }}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: '16px', fontWeight: 500 }}>Nguyễn Văn A</td>
-                    <td style={{ padding: '16px', color: '#888' }}>nva@company.com</td>
-                    <td style={{ padding: '16px' }}>420</td>
-                    <td style={{ padding: '16px', color: '#137333', fontWeight: 600 }}>4.5</td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: '16px', fontWeight: 500 }}>Trần Thị B</td>
-                    <td style={{ padding: '16px', color: '#888' }}>ttb@company.com</td>
-                    <td style={{ padding: '16px' }}>385</td>
-                    <td style={{ padding: '16px', color: '#f9ab00', fontWeight: 600 }}>8.2</td>
-                  </tr>
+                  {staffList.length === 0 ? (
+                    <tr><td colSpan={5} style={{ padding: '24px', textAlign: 'center', color: '#888' }}>Chưa có tài khoản nào.</td></tr>
+                  ) : (
+                    staffList.map(s => (
+                      <tr key={s.email} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '16px', fontWeight: 500 }}>{s.name}</td>
+                        <td style={{ padding: '16px', color: '#888' }}>{s.email}</td>
+                        <td style={{ padding: '16px' }}>{s.role === 'admin' ? 'Admin' : 'Nhân viên'}</td>
+                        <td style={{ padding: '16px' }}>{s.ticket_count}</td>
+                        <td style={{ padding: '16px', textAlign: 'right' }}>
+                          {s.email !== userEmail && (
+                            <button
+                              onClick={() => handleDeleteStaff(s.email)}
+                              style={{ padding: '6px', background: '#fce8e6', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#c5221f' }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

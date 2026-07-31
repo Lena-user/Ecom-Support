@@ -137,7 +137,7 @@ def check_duplicate(state: SupportState) -> dict:
             "status": "duplicate",
             "embedding_vector": vector,
             "processing_log": [
-                f"[{now}] DUPLICATE_CHECK: ⚠ Trùng lặp ngữ nghĩa với ticket "
+                f"[{now}] DUPLICATE_CHECK: Trùng lặp ngữ nghĩa với ticket "
                 f"{prev_ticket} (score={search_result[0].score:.2f}) → dừng xử lý"
             ],
         }
@@ -166,7 +166,7 @@ def check_duplicate(state: SupportState) -> dict:
         "duplicate_ticket_id": "",
         "embedding_vector": vector,
         "processing_log": [
-            f"[{now}] DUPLICATE_CHECK: ✓ Không trùng lặp"
+            f"[{now}] DUPLICATE_CHECK: Không trùng lặp"
         ],
     }
 
@@ -327,7 +327,7 @@ def rag_respond(state: SupportState) -> dict:
         "" if has_sufficient_grounding
         else f"AI đánh giá chưa đủ căn cứ tài liệu để trả lời: {reasoning}"
     )
-    gate_result = "✓ Đủ căn cứ trả lời" if has_sufficient_grounding else "⚠ Không đủ căn cứ → chuyển nhân viên"
+    gate_result = "Đủ căn cứ trả lời" if has_sufficient_grounding else "Không đủ căn cứ → chuyển nhân viên"
 
     return {
         "rag_documents": rag_documents,
@@ -391,7 +391,7 @@ def respond(state: SupportState) -> dict:
     return {
         "status": "resolved",
         "processing_log": [
-            f"[{now}] RESPOND: ✓ Trả lời tự động thành công"
+            f"[{now}] RESPOND: Trả lời tự động thành công"
         ],
     }
 
